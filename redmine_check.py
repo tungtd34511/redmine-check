@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Redmine daily check (thứ 2 - thứ 6, 9h sáng)
-  1. Ngày làm việc hôm trước đã log đủ giờ chưa (thứ 2 thì kiểm tra thứ 6 tuần trước)
-  2. Tổng hợp log time từng ngày trong tuần này
-  3. Task / Bug chưa hoàn thành của tuần trước và tuần này (theo due date), kèm task quá hạn
-  4. Gửi kết quả qua Telegram
+Redmine check – thứ 2 đến thứ 6, gửi kết quả qua Telegram.
 
-Chỉ dùng thư viện chuẩn của Python 3.8+, không cần pip install.
-Chạy thử:  python redmine_check.py --dry-run      (in ra màn hình, không gửi Telegram)
-           python redmine_check.py --date 2026-10-12   (giả lập chạy vào ngày đó)
+  --mode daily (9h sáng):
+      1. Ngày làm việc trước đã log đủ giờ chưa (thứ 2 thì kiểm tra thứ 6 tuần trước)
+      2. Giờ log từng ngày của tuần này và tuần trước
+      3. Task chưa hoàn thành, TẠO trong tuần này hoặc tuần trước, kèm trạng thái
+
+  --mode bugs (mỗi giờ, giờ hành chính):
+      Bug chưa hoàn thành, TẠO trong tuần này hoặc tuần trước, kèm trạng thái.
+      Bug mới tạo trong giờ vừa qua được đánh dấu 🆕.
+
+Chỉ dùng thư viện chuẩn Python 3.8+.
+Chạy thử:  python redmine_check.py --mode daily --dry-run
+           python redmine_check.py --mode bugs  --dry-run --date 2026-10-13
 """
 import argparse
 import datetime as dt
@@ -24,19 +29,8 @@ import urllib.request
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 LOG_PATH = os.path.join(BASE_DIR, "redmine_check.log")
+VN_TZ = dt.timezone(dt.timedelta(hours=7))
 WEEKDAYS_VI = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "CN"]
-
-
-# ----------------------------------------------------------------- helpers
-def log(msg):
-    line = f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] {msg}"
-    print(line)
-    try:
-        with open(LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except OSError:
-        pass
-
 
 ENV_KEYS = {  # biến môi trường (GitHub Secrets) ghi đè config.json
     "REDMINE_URL": "redmine_url",
@@ -44,6 +38,17 @@ ENV_KEYS = {  # biến môi trường (GitHub Secrets) ghi đè config.json
     "TELEGRAM_BOT_TOKEN": "telegram_bot_token",
     "TELEGRAM_CHAT_ID": "telegram_chat_id",
 }
+
+
+# ----------------------------------------------------------------- helpers
+def log(msg):
+    line = f"[{dt.datetime.now(VN_TZ):%Y-%m-%d %H:%M:%S}] {msg}"
+    print(line)
+    try:
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
 
 
 def load_config():
@@ -58,16 +63,22 @@ def load_config():
     if missing:
         sys.exit(f"Thiếu cấu hình: {', '.join(missing)} (điền vào config.json hoặc GitHub Secrets).")
     cfg.setdefault("required_hours_per_day", 8)
-    cfg.setdefault("trackers", ["Task", "Bug"])
+    cfg.setdefault("task_trackers", ["Task"])
+    cfg.setdefault("bug_trackers", ["Bug"])
+    cfg.setdefault("bug_notify", "all")     # "all": báo mỗi giờ nếu còn bug mở; "new": chỉ báo khi có bug mới
     cfg.setdefault("holidays", [])
     cfg.setdefault("verify_ssl", True)
-    cfg.setdefault("include_no_due_date", True)
     cfg["redmine_url"] = cfg["redmine_url"].rstrip("/")
     return cfg
 
 
 def fmt_d(d):
     return f"{WEEKDAYS_VI[d.weekday()]} {d:%d/%m}"
+
+
+def parse_ts(s):
+    """Redmine trả created_on dạng '2026-10-08T03:12:00Z' (UTC) -> datetime giờ VN."""
+    return dt.datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(VN_TZ)
 
 
 # ----------------------------------------------------------------- Redmine API
@@ -89,8 +100,7 @@ class Redmine:
     def get_all(self, path, key, params):
         items, offset = [], 0
         while True:
-            p = dict(params, limit=100, offset=offset)
-            data = self.get(path, p)
+            data = self.get(path, dict(params, limit=100, offset=offset))
             batch = data.get(key, [])
             items.extend(batch)
             offset += len(batch)
@@ -134,62 +144,64 @@ def tracker_ids(rm, names):
     return ids
 
 
-def open_issues(rm, user_id, t_ids):
+def open_issues_created_since(rm, user_id, t_ids, since):
+    """Issue đang mở, giao cho mình, tạo từ ngày `since` trở đi."""
     return rm.get_all("/issues.json", "issues", {
         "assigned_to_id": user_id,
         "status_id": "open",
         "tracker_id": "|".join(t_ids),
-        "sort": "due_date",
+        "created_on": f">={since.isoformat()}",
+        "sort": "created_on:desc",
     })
 
 
-def classify_issues(issues, today, last_mon, last_fri, this_mon, this_fri):
-    groups = {"overdue_old": [], "last_week": [], "this_week": [], "no_due": []}
+def split_by_created_week(issues, this_mon, last_mon):
+    this_w, last_w = [], []
     for i in issues:
-        due = i.get("due_date")
-        start = i.get("start_date")
-        if due:
-            d = dt.date.fromisoformat(due)
-            if d < last_mon:
-                groups["overdue_old"].append(i)
-            elif d <= last_fri + dt.timedelta(days=2):
-                groups["last_week"].append(i)
-            elif d <= this_fri + dt.timedelta(days=2):
-                groups["this_week"].append(i)
-        else:
-            # Không có due date: đưa vào nếu start date nằm trong tuần trước / tuần này hoặc không có start date
-            if start:
-                s = dt.date.fromisoformat(start)
-                if s <= this_fri + dt.timedelta(days=2):
-                    groups["no_due"].append(i)
-            else:
-                groups["no_due"].append(i)
-    return groups
+        c = parse_ts(i["created_on"]).date()
+        if c >= this_mon:
+            this_w.append(i)
+        elif c >= last_mon:
+            last_w.append(i)
+    return this_w, last_w
 
 
 # ----------------------------------------------------------------- report
-def issue_line(i, base_url, today):
-    tracker = i["tracker"]["name"]
-    icon = "🐞" if tracker.lower() == "bug" else "📌"
+def issue_line(i, base_url, today, new_since=None):
+    is_bug = i["tracker"]["name"].lower() == "bug"
+    icon = "🐞" if is_bug else "📌"
+    created = parse_ts(i["created_on"])
+    new = " 🆕" if new_since and created >= new_since else ""
     subj = html.escape(i["subject"][:80])
     status = html.escape(i["status"]["name"])
-    done = i.get("done_ratio", 0)
+    prio = i.get("priority", {}).get("name", "")
+    prio_txt = f" · {html.escape(prio)}" if is_bug and prio else ""
     due = i.get("due_date")
-    late = ""
-    if due and dt.date.fromisoformat(due) < today:
-        late = f" ⚠️ trễ {(today - dt.date.fromisoformat(due)).days} ngày"
-    due_txt = f" | hạn {dt.date.fromisoformat(due):%d/%m}" if due else ""
-    return (f'{icon} <a href="{base_url}/issues/{i["id"]}">#{i["id"]}</a> {subj}\n'
-            f'     {status} · {done}%{due_txt}{late}')
+    due_txt, late = "", ""
+    if due:
+        d = dt.date.fromisoformat(due)
+        due_txt = f" · hạn {d:%d/%m}"
+        if d < today:
+            late = f" ⚠️ trễ {(today - d).days} ngày"
+    return (f'{icon} <a href="{base_url}/issues/{i["id"]}">#{i["id"]}</a> {subj}{new}\n'
+            f'     <i>{status}</i> · {i.get("done_ratio", 0)}%{prio_txt}'
+            f' · tạo {created:%d/%m}{due_txt}{late}')
 
 
-def build_report(cfg, today, user, prev_day, prev_hours, week_hours, groups):
+def issue_sections(this_w, last_w, url, today, new_since=None):
+    out = []
+    for title, items in (("Tạo tuần này", this_w), ("Tạo tuần trước", last_w)):
+        if items:
+            out.append(f"\n<b>{title} ({len(items)})</b>")
+            out.extend(issue_line(i, url, today, new_since) for i in items)
+    return out
+
+
+def build_daily(cfg, today, user, prev_day, prev_hours, week_hours, tasks_this, tasks_last):
     req = cfg["required_hours_per_day"]
     url = cfg["redmine_url"]
-    out = [f"<b>📋 Redmine check – {fmt_d(today)}/{today:%Y}</b>",
-           f"👤 {html.escape(user)}", ""]
+    out = [f"<b>📋 Redmine check – {fmt_d(today)}/{today:%Y}</b>", f"👤 {html.escape(user)}", ""]
 
-    # 1. Ngày hôm trước
     ok = prev_hours >= req
     out.append("<b>⏱ Log time ngày làm việc trước</b>")
     out.append(f"{fmt_d(prev_day)}: <b>{prev_hours:g}h / {req:g}h</b> "
@@ -198,37 +210,31 @@ def build_report(cfg, today, user, prev_day, prev_hours, week_hours, groups):
         out.append(f'👉 <a href="{url}/time_entries/new">Log time ngay</a>')
     out.append("")
 
-    # 2. Tuần này + tuần trước
     for title, days in week_hours:
         if not days:
             continue
         total = sum(h for _, h in days)
-        need = req * len(days)
-        out.append(f"<b>📅 {title}: {total:g}h / {need:g}h</b>")
+        out.append(f"<b>📅 {title}: {total:g}h / {req * len(days):g}h</b>")
         for d, h in days:
             mark = "✅" if h >= req else ("❌" if h == 0 else "⚠️")
             out.append(f"  {mark} {fmt_d(d)}: {h:g}h")
         out.append("")
 
-    # 3. Issues
-    sections = [
-        ("🔴 Quá hạn từ trước tuần trước", "overdue_old"),
-        ("🟠 Tuần trước chưa xong", "last_week"),
-        ("🟡 Tuần này chưa xong", "this_week"),
-    ]
-    if cfg["include_no_due_date"]:
-        sections.append(("⚪ Chưa có due date", "no_due"))
-    total_open = sum(len(groups[k]) for _, k in sections)
-    out.append(f"<b>🧩 Task/Bug chưa hoàn thành: {total_open}</b>")
-    if total_open == 0:
-        out.append("Không có task/bug nào tồn đọng 🎉")
-    for title, key in sections:
-        items = groups[key]
-        if not items:
-            continue
-        out.append(f"\n<b>{title} ({len(items)})</b>")
-        out.extend(issue_line(i, url, today) for i in items)
+    n = len(tasks_this) + len(tasks_last)
+    out.append(f"<b>📌 Task chưa hoàn thành (tạo tuần này + tuần trước): {n}</b>")
+    if n == 0:
+        out.append("Không có task tồn đọng 🎉")
+    out.extend(issue_sections(tasks_this, tasks_last, url, today))
     return "\n".join(out)
+
+
+def build_bugs(cfg, now, bugs_this, bugs_last, new_since):
+    n = len(bugs_this) + len(bugs_last)
+    n_new = sum(1 for i in bugs_this + bugs_last if parse_ts(i["created_on"]) >= new_since)
+    head = f"<b>🐞 Bug chưa xong: {n}</b>" + (f" · 🆕 {n_new} bug mới" if n_new else "")
+    out = [head, f"<i>Kiểm tra lúc {now:%H:%M %d/%m}</i>"]
+    out.extend(issue_sections(bugs_this, bugs_last, cfg["redmine_url"], now.date(), new_since))
+    return "\n".join(out), n, n_new
 
 
 # ----------------------------------------------------------------- telegram
@@ -252,14 +258,17 @@ def send_telegram(token, chat_id, text):
 # ----------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--mode", choices=["daily", "bugs"], default="daily")
     ap.add_argument("--dry-run", action="store_true", help="Chỉ in báo cáo, không gửi Telegram")
     ap.add_argument("--date", help="Giả lập ngày chạy (YYYY-MM-DD)")
     ap.add_argument("--force", action="store_true", help="Chạy cả cuối tuần / ngày lễ")
     args = ap.parse_args()
 
     cfg = load_config()
-    vn_now = dt.datetime.now(dt.timezone(dt.timedelta(hours=7)))  # giờ Việt Nam, kể cả khi máy chạy UTC
-    today = dt.date.fromisoformat(args.date) if args.date else vn_now.date()
+    now = dt.datetime.now(VN_TZ)
+    if args.date:
+        now = dt.datetime.combine(dt.date.fromisoformat(args.date), now.timetz())
+    today = now.date()
     holidays = set(cfg["holidays"])
 
     if not args.force and (today.weekday() >= 5 or today.isoformat() in holidays):
@@ -272,14 +281,30 @@ def main():
     user_name = f'{me.get("firstname", "")} {me.get("lastname", "")}'.strip() or me.get("login", "")
 
     this_mon = today - dt.timedelta(days=today.weekday())
-    this_fri = this_mon + dt.timedelta(days=4)
     last_mon = this_mon - dt.timedelta(days=7)
     last_fri = last_mon + dt.timedelta(days=4)
-    prev_day = previous_working_day(today, holidays)
 
+    def send(text):
+        if args.dry_run:
+            print(text)
+        else:
+            send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], text)
+
+    if args.mode == "bugs":
+        bugs = open_issues_created_since(rm, user_id, tracker_ids(rm, cfg["bug_trackers"]), last_mon)
+        b_this, b_last = split_by_created_week(bugs, this_mon, last_mon)
+        new_since = now - dt.timedelta(minutes=65)
+        text, n, n_new = build_bugs(cfg, now, b_this, b_last, new_since)
+        notify = n_new > 0 if cfg["bug_notify"] == "new" else n > 0
+        if notify:
+            send(text)
+        log(f"[bugs] {n} bug mở, {n_new} mới, {'đã gửi' if notify else 'không gửi'}.")
+        return
+
+    # daily
+    prev_day = previous_working_day(today, holidays)
     totals = hours_by_day(rm, user_id, min(last_mon, prev_day), today)
     prev_hours = totals.get(prev_day.isoformat(), 0.0)
-
     yesterday = today - dt.timedelta(days=1)
     week_hours = [
         ("Tuần này (đến hôm qua)", [(d, totals.get(d.isoformat(), 0.0))
@@ -287,17 +312,10 @@ def main():
         ("Tuần trước", [(d, totals.get(d.isoformat(), 0.0))
                         for d in working_days(last_mon, last_fri, holidays)]),
     ]
-
-    issues = open_issues(rm, user_id, tracker_ids(rm, cfg["trackers"]))
-    groups = classify_issues(issues, today, last_mon, last_fri, this_mon, this_fri)
-
-    report = build_report(cfg, today, user_name, prev_day, prev_hours, week_hours, groups)
-
-    if args.dry_run:
-        print(report)
-    else:
-        send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], report)
-        log(f"Đã gửi báo cáo: {prev_day} = {prev_hours:g}h, {len(issues)} issue mở.")
+    tasks = open_issues_created_since(rm, user_id, tracker_ids(rm, cfg["task_trackers"]), last_mon)
+    t_this, t_last = split_by_created_week(tasks, this_mon, last_mon)
+    send(build_daily(cfg, today, user_name, prev_day, prev_hours, week_hours, t_this, t_last))
+    log(f"[daily] {prev_day} = {prev_hours:g}h, {len(tasks)} task mở.")
 
 
 if __name__ == "__main__":
@@ -305,12 +323,12 @@ if __name__ == "__main__":
         main()
     except SystemExit:
         raise
-    except Exception as e:  # gửi lỗi về Telegram để không bị "im lặng"
+    except Exception as e:  # báo lỗi về Telegram để không bị "im lặng"
         log(f"LỖI: {e!r}")
         try:
             cfg = load_config()
             send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"],
-                          f"⚠️ Redmine check lỗi: {html.escape(repr(e))}\n(Có thể chưa bật VPN?)")
+                          f"⚠️ Redmine check lỗi: {html.escape(repr(e))}")
         except Exception:
             pass
         sys.exit(1)

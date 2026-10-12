@@ -1,9 +1,15 @@
 # Redmine Daily Check – chạy tự động trên GitHub Actions
 
-Không cần bật laptop. Khoảng 9h sáng thứ 2 – thứ 6, GitHub sẽ chạy script và gửi Telegram:
+Không cần bật laptop. GitHub tự chạy thứ 2 – thứ 6 và gửi Telegram:
+
+**9h sáng – báo cáo ngày** (`redmine-check.yml`)
 - Log time ngày làm việc trước đã đủ 8h chưa (thứ 2 thì kiểm tra thứ 6 tuần trước)
-- Bảng giờ từng ngày của tuần này và tuần trước
-- Task/Bug đang mở của bạn: quá hạn cũ, tuần trước chưa xong, tuần này chưa xong, chưa có due date
+- Giờ log từng ngày của tuần này và tuần trước
+- Task chưa hoàn thành **được tạo trong tuần này hoặc tuần trước**, kèm trạng thái, % và hạn
+
+**Mỗi giờ từ 8h đến 17h – kiểm tra bug** (`redmine-bugs.yml`)
+- Bug chưa hoàn thành **được tạo trong tuần này hoặc tuần trước**, kèm trạng thái và độ ưu tiên
+- Bug mới tạo trong giờ vừa qua được đánh dấu 🆕
 
 ## 1. Lấy thông tin cần thiết
 - **Redmine API key**: vào https://redmine.dbvi.com.vn/my/account → khung bên phải *API access key* → *Show*.
@@ -41,11 +47,13 @@ Nếu lỗi: bấm vào lần chạy màu đỏ để xem log. Bạn cũng sẽ 
 | Khóa | Ý nghĩa |
 |---|---|
 | `required_hours_per_day` | Số giờ cần log mỗi ngày |
-| `trackers` | Tên tracker cần theo dõi, đúng như trên Redmine |
-| `include_no_due_date` | Có liệt kê task không có due date không |
+| `task_trackers` | Tên tracker tính là task, đúng như trên Redmine |
+| `bug_trackers` | Tên tracker tính là bug |
+| `bug_notify` | `"all"`: mỗi giờ báo nếu còn bug mở · `"new"`: chỉ báo khi có bug mới |
 | `holidays` | Ngày nghỉ lễ / nghỉ phép (`YYYY-MM-DD`), các ngày này không bị kiểm tra |
 
 ## Lưu ý
+- "Chưa hoàn thành" = trạng thái đang mở trên Redmine (chưa Closed/Rejected...).
 - Lịch của GitHub thường trễ 5–15 phút, nên đã đặt chạy lúc 8:50 để tin nhắn tới khoảng 9h.
 - GitHub tự **tạm dừng lịch chạy sau 60 ngày repository không có thay đổi** và gửi email báo trước.
   Khi nhận email, bấm nút kích hoạt lại, hoặc sửa nhẹ một file (ví dụ thêm ngày nghỉ vào `holidays`).

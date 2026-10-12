@@ -1,0 +1,25 @@
+name: Redmine Bug Check (hourly)
+
+on:
+  schedule:
+    # Mỗi giờ từ 8h đến 17h giờ Việt Nam (01:05 - 10:05 UTC), thứ 2 - thứ 6
+    - cron: "5 1-10 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  bugs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run bug check
+        env:
+          TZ: Asia/Ho_Chi_Minh
+          REDMINE_URL: ${{ secrets.REDMINE_URL }}
+          REDMINE_API_KEY: ${{ secrets.REDMINE_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python redmine_check.py --mode bugs
