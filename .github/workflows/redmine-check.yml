@@ -1,11 +1,14 @@
 name: Redmine Daily Check
 
 on:
-  schedule:
-    # 01:37 UTC = 08:37 giờ Việt Nam, thứ 2 - thứ 6
-    # (GitHub thường trễ 5-15 phút, nên đặt sớm để tin nhắn tới khoảng 9h)
-    - cron: "37 1 * * 1-5"
-  workflow_dispatch:        # nút "Run workflow" để chạy thử bằng tay
+  # Lịch chạy do scheduled task của Claude gọi (GitHub schedule không ổn định).
+  # Claude gọi với manual=false: bỏ qua cuối tuần / ngày lễ.
+  workflow_dispatch:
+    inputs:
+      manual:
+        description: "Chạy tay (chạy cả cuối tuần / ngày lễ)"
+        type: boolean
+        default: true
 
 jobs:
   check:
@@ -23,4 +26,4 @@ jobs:
           REDMINE_API_KEY: ${{ secrets.REDMINE_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python redmine_check.py --mode daily ${{ github.event_name == 'workflow_dispatch' && '--force' || '' }}
+        run: python redmine_check.py --mode daily ${{ inputs.manual && '--force' || '' }}
