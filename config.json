@@ -3,6 +3,7 @@
   "task_trackers": ["Task"],
   "bug_trackers": ["Bug"],
   "bug_notify": "all",
+  "exclude_statuses": ["Closed", "Rejected", "Reject"],
   "verify_ssl": true,
   "holidays": ["2027-01-01"]
 }

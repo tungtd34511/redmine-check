@@ -66,6 +66,7 @@ def load_config():
     cfg.setdefault("task_trackers", ["Task"])
     cfg.setdefault("bug_trackers", ["Bug"])
     cfg.setdefault("bug_notify", "all")     # "all": báo mỗi giờ nếu còn bug mở; "new": chỉ báo khi có bug mới
+    cfg.setdefault("exclude_statuses", ["Closed", "Rejected", "Reject"])
     cfg.setdefault("holidays", [])
     cfg.setdefault("verify_ssl", True)
     cfg["redmine_url"] = cfg["redmine_url"].rstrip("/")
@@ -144,15 +145,19 @@ def tracker_ids(rm, names):
     return ids
 
 
-def open_issues_created_since(rm, user_id, t_ids, since):
-    """Issue đang mở, giao cho mình, tạo từ ngày `since` trở đi."""
-    return rm.get_all("/issues.json", "issues", {
+def open_issues_created_since(rm, user_id, t_ids, since, exclude_statuses):
+    """Issue chưa đóng, giao cho mình, tạo từ ngày `since` trở đi.
+    Loại thêm các trạng thái trong exclude_statuses, vì một số Redmine
+    không đánh dấu Closed/Rejected là trạng thái đóng."""
+    issues = rm.get_all("/issues.json", "issues", {
         "assigned_to_id": user_id,
         "status_id": "open",
         "tracker_id": "|".join(t_ids),
         "created_on": f">={since.isoformat()}",
         "sort": "created_on:desc",
     })
+    excl = {s.strip().lower() for s in exclude_statuses}
+    return [i for i in issues if i["status"]["name"].strip().lower() not in excl]
 
 
 def split_by_created_week(issues, this_mon, last_mon):
@@ -291,7 +296,8 @@ def main():
             send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], text)
 
     if args.mode == "bugs":
-        bugs = open_issues_created_since(rm, user_id, tracker_ids(rm, cfg["bug_trackers"]), last_mon)
+        bugs = open_issues_created_since(rm, user_id, tracker_ids(rm, cfg["bug_trackers"]), last_mon,
+                                          cfg["exclude_statuses"])
         b_this, b_last = split_by_created_week(bugs, this_mon, last_mon)
         new_since = now - dt.timedelta(minutes=65)
         text, n, n_new = build_bugs(cfg, now, b_this, b_last, new_since)
@@ -312,7 +318,8 @@ def main():
         ("Tuần trước", [(d, totals.get(d.isoformat(), 0.0))
                         for d in working_days(last_mon, last_fri, holidays)]),
     ]
-    tasks = open_issues_created_since(rm, user_id, tracker_ids(rm, cfg["task_trackers"]), last_mon)
+    tasks = open_issues_created_since(rm, user_id, tracker_ids(rm, cfg["task_trackers"]), last_mon,
+                                       cfg["exclude_statuses"])
     t_this, t_last = split_by_created_week(tasks, this_mon, last_mon)
     send(build_daily(cfg, today, user_name, prev_day, prev_hours, week_hours, t_this, t_last))
     log(f"[daily] {prev_day} = {prev_hours:g}h, {len(tasks)} task mở.")

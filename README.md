@@ -50,6 +50,7 @@ Nếu lỗi: bấm vào lần chạy màu đỏ để xem log. Bạn cũng sẽ 
 | `task_trackers` | Tên tracker tính là task, đúng như trên Redmine |
 | `bug_trackers` | Tên tracker tính là bug |
 | `bug_notify` | `"all"`: mỗi giờ báo nếu còn bug mở · `"new"`: chỉ báo khi có bug mới |
+| `exclude_statuses` | Trạng thái coi như đã xong, không báo (vd. `"Closed"`, `"Rejected"`, `"Resolved"`) |
 | `holidays` | Ngày nghỉ lễ / nghỉ phép (`YYYY-MM-DD`), các ngày này không bị kiểm tra |
 
 ## Lưu ý
