@@ -172,73 +172,113 @@ def split_by_created_week(issues, this_mon, last_mon):
 
 
 # ----------------------------------------------------------------- report
-def issue_line(i, base_url, today, new_since=None):
+LINE = "━━━━━━━━━━━━━━━━━━"
+WD_SHORT = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"]
+STATUS_ICON = {"new": "🆕", "open": "⚪", "in progress": "🔄", "doing": "🔄", "feedback": "💬",
+               "reopened": "🔁", "reopen": "🔁", "resolved": "✔️", "pending": "⏸", "testing": "🧪"}
+PRIO_ICON = {"immediate": "🔴", "urgent": "🔴", "high": "🟠", "normal": "🟡", "low": "🟢"}
+
+
+def progress_bar(pct, width=5):
+    filled = round(pct / 100 * width)
+    return "▰" * filled + "▱" * (width - filled)
+
+
+def issue_block(n, i, base_url, today, new_since=None):
+    """
+    1. #2406 Lỗi sai logic phân cấp tạm ứng 🆕
+       🔄 In Progress · ▰▰▱▱▱ 40%
+       🟠 High · tạo 12/10 · ⏰ hạn 14/10
+    """
     is_bug = i["tracker"]["name"].lower() == "bug"
-    icon = "🐞" if is_bug else "📌"
     created = parse_ts(i["created_on"])
     new = " 🆕" if new_since and created >= new_since else ""
-    subj = html.escape(i["subject"][:80])
-    status = html.escape(i["status"]["name"])
-    prio = i.get("priority", {}).get("name", "")
-    prio_txt = f" · {html.escape(prio)}" if is_bug and prio else ""
+    subj = html.escape(i["subject"].strip()[:70] + ("…" if len(i["subject"].strip()) > 70 else ""))
+    status = i["status"]["name"]
+    s_icon = STATUS_ICON.get(status.lower(), "•")
+    pct = i.get("done_ratio", 0) or 0
+    meta = []
+    if is_bug:
+        prio = i.get("priority", {}).get("name", "")
+        if prio:
+            meta.append(f"{PRIO_ICON.get(prio.lower(), '⚪')} {html.escape(prio)}")
+    meta.append(f"tạo {created:%d/%m}")
     due = i.get("due_date")
-    due_txt, late = "", ""
     if due:
         d = dt.date.fromisoformat(due)
-        due_txt = f" · hạn {d:%d/%m}"
-        if d < today:
-            late = f" ⚠️ trễ {(today - d).days} ngày"
-    return (f'{icon} <a href="{base_url}/issues/{i["id"]}">#{i["id"]}</a> {subj}{new}\n'
-            f'     <i>{status}</i> · {i.get("done_ratio", 0)}%{prio_txt}'
-            f' · tạo {created:%d/%m}{due_txt}{late}')
+        meta.append(f"<b>⚠️ trễ {(today - d).days} ngày</b>" if d < today else f"⏰ hạn {d:%d/%m}")
+    return (f'<b>{n}.</b> <a href="{base_url}/issues/{i["id"]}">#{i["id"]}</a> {subj}{new}\n'
+            f'    {s_icon} <i>{html.escape(status)}</i> · {progress_bar(pct)} {pct}%\n'
+            f'    {" · ".join(meta)}')
 
 
-def issue_sections(this_w, last_w, url, today, new_since=None):
-    out = []
-    for title, items in (("Tạo tuần này", this_w), ("Tạo tuần trước", last_w)):
-        if items:
-            out.append(f"\n<b>{title} ({len(items)})</b>")
-            out.extend(issue_line(i, url, today, new_since) for i in items)
+def issue_sections(this_w, last_w, url, today, new_since=None, sort_key=None):
+    out, n = [], 0
+    for title, items in (("🔹 Tạo tuần này", this_w), ("🔸 Tạo tuần trước", last_w)):
+        if not items:
+            continue
+        if sort_key:
+            items = sorted(items, key=sort_key)
+        out.append(f"\n<b>{title}</b> ({len(items)})")
+        for i in items:
+            n += 1
+            out.append(issue_block(n, i, url, today, new_since))
     return out
+
+
+def week_line(days, req):
+    """T2 ✅8  T3 ✅8  T4 ⚠️5  T5 ❌0"""
+    parts = []
+    for d, h in days:
+        mark = "✅" if h >= req else ("❌" if h == 0 else "⚠️")
+        parts.append(f"{WD_SHORT[d.weekday()]} {mark}{h:g}")
+    return "  ".join(parts)
 
 
 def build_daily(cfg, today, user, prev_day, prev_hours, week_hours, tasks_this, tasks_last):
     req = cfg["required_hours_per_day"]
     url = cfg["redmine_url"]
-    out = [f"<b>📋 Redmine check – {fmt_d(today)}/{today:%Y}</b>", f"👤 {html.escape(user)}", ""]
+    out = [f"📋 <b>BÁO CÁO NGÀY · {fmt_d(today)}</b>", f"👤 {html.escape(user)}", LINE]
 
-    ok = prev_hours >= req
-    out.append("<b>⏱ Log time ngày làm việc trước</b>")
-    out.append(f"{fmt_d(prev_day)}: <b>{prev_hours:g}h / {req:g}h</b> "
-               + ("✅ Đủ" if ok else f"❌ Thiếu {req - prev_hours:g}h"))
-    if not ok:
+    # Log time
+    out.append("⏱ <b>LOG TIME</b>")
+    if prev_hours >= req:
+        out.append(f"{fmt_d(prev_day)}: <b>{prev_hours:g}/{req:g}h</b> ✅ Đủ")
+    else:
+        out.append(f"{fmt_d(prev_day)}: <b>{prev_hours:g}/{req:g}h</b> ❌ <b>Thiếu {req - prev_hours:g}h</b>")
         out.append(f'👉 <a href="{url}/time_entries/new">Log time ngay</a>')
-    out.append("")
-
     for title, days in week_hours:
         if not days:
             continue
-        total = sum(h for _, h in days)
-        out.append(f"<b>📅 {title}: {total:g}h / {req * len(days):g}h</b>")
-        for d, h in days:
-            mark = "✅" if h >= req else ("❌" if h == 0 else "⚠️")
-            out.append(f"  {mark} {fmt_d(d)}: {h:g}h")
-        out.append("")
+        total, need = sum(h for _, h in days), req * len(days)
+        mark = "✅" if total >= need else "⚠️"
+        out.append(f"\n<b>{title}</b> {total:g}/{need:g}h {mark}")
+        out.append(week_line(days, req))
 
+    # Task
     n = len(tasks_this) + len(tasks_last)
-    out.append(f"<b>📌 Task chưa hoàn thành (tạo tuần này + tuần trước): {n}</b>")
+    out.append(LINE)
+    out.append(f"📌 <b>TASK ĐANG MỞ · {n}</b>")
     if n == 0:
         out.append("Không có task tồn đọng 🎉")
-    out.extend(issue_sections(tasks_this, tasks_last, url, today))
+    else:
+        late_first = lambda i: (i.get("due_date") or "9999-12-31")
+        out.extend(issue_sections(tasks_this, tasks_last, url, today, sort_key=late_first))
     return "\n".join(out)
 
 
 def build_bugs(cfg, now, bugs_this, bugs_last, new_since):
     n = len(bugs_this) + len(bugs_last)
     n_new = sum(1 for i in bugs_this + bugs_last if parse_ts(i["created_on"]) >= new_since)
-    head = f"<b>🐞 Bug chưa xong: {n}</b>" + (f" · 🆕 {n_new} bug mới" if n_new else "")
-    out = [head, f"<i>Kiểm tra lúc {now:%H:%M %d/%m}</i>"]
-    out.extend(issue_sections(bugs_this, bugs_last, cfg["redmine_url"], now.date(), new_since))
+    head = f"🐞 <b>BUG ĐANG MỞ · {n}</b>" + (f"   🆕 <b>{n_new} mới</b>" if n_new else "")
+    out = [head, f"🕘 {now:%H:%M} · {fmt_d(now.date())}", LINE]
+    if n == 0:
+        out.append("Không có bug nào đang mở 🎉")
+    else:
+        # ưu tiên cao lên trước, rồi bug mới nhất
+        by_prio = lambda i: (-(i.get("priority", {}).get("id", 0)), -parse_ts(i["created_on"]).timestamp())
+        out.extend(issue_sections(bugs_this, bugs_last, cfg["redmine_url"], now.date(),
+                                  new_since, sort_key=by_prio))
     return "\n".join(out), n, n_new
 
 
@@ -267,6 +307,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="Chỉ in báo cáo, không gửi Telegram")
     ap.add_argument("--date", help="Giả lập ngày chạy (YYYY-MM-DD)")
     ap.add_argument("--force", action="store_true", help="Chạy cả cuối tuần / ngày lễ")
+    ap.add_argument("--always", action="store_true", help="Luôn gửi tin (dùng khi bấm chạy tay)")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -301,7 +342,7 @@ def main():
         b_this, b_last = split_by_created_week(bugs, this_mon, last_mon)
         new_since = now - dt.timedelta(minutes=65)
         text, n, n_new = build_bugs(cfg, now, b_this, b_last, new_since)
-        notify = n_new > 0 if cfg["bug_notify"] == "new" else n > 0
+        notify = args.always or (n_new > 0 if cfg["bug_notify"] == "new" else n > 0)
         if notify:
             send(text)
         log(f"[bugs] {n} bug mở, {n_new} mới, {'đã gửi' if notify else 'không gửi'}.")
@@ -313,9 +354,9 @@ def main():
     prev_hours = totals.get(prev_day.isoformat(), 0.0)
     yesterday = today - dt.timedelta(days=1)
     week_hours = [
-        ("Tuần này (đến hôm qua)", [(d, totals.get(d.isoformat(), 0.0))
+        ("📅 Tuần này", [(d, totals.get(d.isoformat(), 0.0))
                                     for d in working_days(this_mon, yesterday, holidays)]),
-        ("Tuần trước", [(d, totals.get(d.isoformat(), 0.0))
+        ("📅 Tuần trước", [(d, totals.get(d.isoformat(), 0.0))
                         for d in working_days(last_mon, last_fri, holidays)]),
     ]
     tasks = open_issues_created_since(rm, user_id, tracker_ids(rm, cfg["task_trackers"]), last_mon,
