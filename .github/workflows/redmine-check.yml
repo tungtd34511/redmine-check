@@ -2,9 +2,9 @@ name: Redmine Daily Check
 
 on:
   schedule:
-    # 01:50 UTC = 08:50 giờ Việt Nam, thứ 2 - thứ 6
+    # 01:37 UTC = 08:37 giờ Việt Nam, thứ 2 - thứ 6
     # (GitHub thường trễ 5-15 phút, nên đặt sớm để tin nhắn tới khoảng 9h)
-    - cron: "50 1 * * 1-5"
+    - cron: "37 1 * * 1-5"
   workflow_dispatch:        # nút "Run workflow" để chạy thử bằng tay
 
 jobs:

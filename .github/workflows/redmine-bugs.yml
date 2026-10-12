@@ -2,8 +2,8 @@ name: Redmine Bug Check (hourly)
 
 on:
   schedule:
-    # Mỗi giờ từ 8h đến 17h giờ Việt Nam (01:05 - 10:05 UTC), thứ 2 - thứ 6
-    - cron: "5 1-10 * * 1-5"
+    # Mỗi giờ phút 23, từ 8h23 đến 17h23 giờ Việt Nam (01:23 - 10:23 UTC), thứ 2 - thứ 6
+    - cron: "23 1-10 * * 1-5"
   workflow_dispatch:
 
 jobs:
