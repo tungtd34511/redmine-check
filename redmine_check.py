@@ -141,7 +141,9 @@ def tracker_ids(rm, names):
     ids = [str(t["id"]) for t in all_t if t["name"].strip().lower() in wanted]
     if not ids:
         avail = ", ".join(t["name"] for t in all_t)
-        raise SystemExit(f"Không tìm thấy tracker {names}. Tracker hiện có: {avail}")
+        raise SystemExit(f"Không tìm thấy tracker {', '.join(names)} trên Redmine.\n"
+                         f"Tracker hiện có: {avail}\n"
+                         f"→ Nhắn Claude tên đúng để sửa config.json")
     return ids
 
 
@@ -369,14 +371,26 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except SystemExit:
+    except SystemExit as e:
+        if isinstance(e.code, str):  # lỗi cấu hình (vd. sai tên tracker) -> báo về Telegram
+            log(f"LỖI: {e.code}")
+            try:
+                cfg = load_config()
+                send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"],
+                              f"⚠️ <b>Redmine check lỗi</b>\n{html.escape(e.code)}")
+            except BaseException:
+                pass
+            sys.exit(1)
         raise
     except Exception as e:  # báo lỗi về Telegram để không bị "im lặng"
-        log(f"LỖI: {e!r}")
+        detail = repr(e)
+        if hasattr(e, "code") and hasattr(e, "url"):  # HTTPError
+            detail = f"HTTP {e.code} khi gọi {e.url.split('?')[0]}"
+        log(f"LỖI: {detail}")
         try:
             cfg = load_config()
             send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"],
-                          f"⚠️ Redmine check lỗi: {html.escape(repr(e))}")
-        except Exception:
+                          f"⚠️ <b>Redmine check lỗi</b>\n{html.escape(detail)}")
+        except BaseException:
             pass
         sys.exit(1)
