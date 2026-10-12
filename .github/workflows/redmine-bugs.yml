@@ -1,14 +1,13 @@
 name: Redmine Bug Check (hourly)
 
 on:
-  # Lịch chạy do scheduled task của Claude gọi (GitHub schedule không ổn định).
-  # Claude gọi với manual=false: chỉ gửi tin khi có bug.
+  # Lịch chạy do cron-job.org gọi qua API (lịch của GitHub không ổn định).
+  # cron-job.org gửi inputs.manual = "false"; bấm tay trên GitHub thì manual = "true".
   workflow_dispatch:
     inputs:
       manual:
-        description: "Chạy tay (luôn gửi tin kể cả khi không có bug)"
-        type: boolean
-        default: true
+        description: "Chạy tay (luôn gửi tin)"
+        default: "true"
 
 jobs:
   bugs:
@@ -26,4 +25,4 @@ jobs:
           REDMINE_API_KEY: ${{ secrets.REDMINE_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python redmine_check.py --mode bugs ${{ inputs.manual && '--always' || '' }}
+        run: python redmine_check.py --mode bugs ${{ inputs.manual != 'false' && '--always' || '' }}

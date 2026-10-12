@@ -1,14 +1,13 @@
 name: Redmine Daily Check
 
 on:
-  # Lịch chạy do scheduled task của Claude gọi (GitHub schedule không ổn định).
-  # Claude gọi với manual=false: bỏ qua cuối tuần / ngày lễ.
+  # Lịch chạy do cron-job.org gọi qua API (lịch của GitHub không ổn định).
+  # cron-job.org gửi inputs.manual = "false"; bấm tay trên GitHub thì manual = "true".
   workflow_dispatch:
     inputs:
       manual:
-        description: "Chạy tay (chạy cả cuối tuần / ngày lễ)"
-        type: boolean
-        default: true
+        description: "Chạy tay (luôn gửi tin)"
+        default: "true"
 
 jobs:
   check:
@@ -26,4 +25,4 @@ jobs:
           REDMINE_API_KEY: ${{ secrets.REDMINE_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python redmine_check.py --mode daily ${{ inputs.manual && '--force' || '' }}
+        run: python redmine_check.py --mode daily ${{ inputs.manual != 'false' && '--force' || '' }}
