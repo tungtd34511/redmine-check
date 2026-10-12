@@ -1,0 +1,7 @@
+{
+  "required_hours_per_day": 8,
+  "trackers": ["Task", "Bug"],
+  "include_no_due_date": true,
+  "verify_ssl": true,
+  "holidays": ["2027-01-01"]
+}
