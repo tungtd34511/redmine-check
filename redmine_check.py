@@ -368,29 +368,32 @@ def main():
     log(f"[daily] {prev_day} = {prev_hours:g}h, {len(tasks)} task mở.")
 
 
+def notify_error(detail):
+    log(f"LỖI: {detail}")
+    try:
+        cfg = load_config()
+        send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"],
+                      f"⚠️ <b>Redmine check lỗi</b>\n{html.escape(detail)}")
+    except BaseException as e:
+        log(f"Không gửi được lỗi về Telegram: {e!r}")
+        return
+    gh_output = os.environ.get("GITHUB_OUTPUT")
+    if gh_output:
+        with open(gh_output, "a", encoding="utf-8") as f:
+            f.write("notified=1\n")
+
+
 if __name__ == "__main__":
     try:
         main()
     except SystemExit as e:
         if isinstance(e.code, str):  # lỗi cấu hình (vd. sai tên tracker) -> báo về Telegram
-            log(f"LỖI: {e.code}")
-            try:
-                cfg = load_config()
-                send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"],
-                              f"⚠️ <b>Redmine check lỗi</b>\n{html.escape(e.code)}")
-            except BaseException:
-                pass
+            notify_error(e.code)
             sys.exit(1)
         raise
     except Exception as e:  # báo lỗi về Telegram để không bị "im lặng"
         detail = repr(e)
         if hasattr(e, "code") and hasattr(e, "url"):  # HTTPError
             detail = f"HTTP {e.code} khi gọi {e.url.split('?')[0]}"
-        log(f"LỖI: {detail}")
-        try:
-            cfg = load_config()
-            send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"],
-                          f"⚠️ <b>Redmine check lỗi</b>\n{html.escape(detail)}")
-        except BaseException:
-            pass
+        notify_error(detail)
         sys.exit(1)

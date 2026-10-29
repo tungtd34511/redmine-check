@@ -1,6 +1,6 @@
 {
   "required_hours_per_day": 8,
-  "task_trackers": ["Task"],
+  "task_trackers": ["Develop", "Support", "Feature", "Docs/TC", "Change Request (CR)"],
   "bug_trackers": ["Bug"],
   "bug_notify": "all",
   "exclude_statuses": ["Closed", "Rejected", "Reject"],

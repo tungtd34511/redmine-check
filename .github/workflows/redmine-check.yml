@@ -19,6 +19,8 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run Redmine check
+        id: check
+        timeout-minutes: 8
         env:
           TZ: Asia/Ho_Chi_Minh
           REDMINE_URL: ${{ secrets.REDMINE_URL }}
@@ -26,3 +28,14 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python redmine_check.py --mode daily ${{ inputs.manual != 'false' && '--force' || '' }}
+      - name: Notify failure
+        if: (failure() || cancelled()) && steps.check.outputs.notified != '1'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=⚠️ ${WORKFLOW_NAME} lỗi, xem log: ${RUN_URL}" > /dev/null
